@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.13;
+pragma solidity ^0.8.20;
 import {console} from "forge-std/console.sol";
 import  "./Market.sol";
 /*
@@ -24,12 +24,12 @@ contract BondingFactory {
     function createToken(
         string memory name,
         string memory symbol,
-        uint256 _initialMint,
-        uint256 _a,
-        uint256 _b,
-        uint256 _targetEth,
-        uint256 _treasuryFeeBps,
-        address _admin
+        uint256 _initialMint
+        // uint256 _a,
+        // uint256 _b,
+        // uint256 _targetEth,
+        // uint256 _treasuryFeeBps,
+        // address _admin
     ) external returns (address tokenAddr, address marketAddr) {
         // deploy token with initial mint to address(0) for now; we'll mint to market after its creation.
         ERC20Mintable token = new ERC20Mintable(name, symbol, 0, address(this));
@@ -37,14 +37,14 @@ contract BondingFactory {
 
         // deploy market with placeholder tokensAllocated; tokensAllocated = _initialMint
         Market market = new Market(
-            tokenAddr,
-            router,
-            _a,
-            _b,
-            _initialMint,
-            _targetEth,
-            _treasuryFeeBps,
-            _admin // admin
+            tokenAddr
+            // router,
+            // _a,
+            // _b,
+            // _initialMint,
+            // _targetEth,
+            // _treasuryFeeBps,
+            // _admin // admin
         );
         marketAddr = address(market);
 

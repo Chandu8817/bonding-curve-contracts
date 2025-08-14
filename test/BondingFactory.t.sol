@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.13;
+pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import "../src/BondingFactory.sol";
@@ -29,12 +29,12 @@ contract BondingFactoryTest is Test {
         (address tokenAddr, address marketAddr) = factory.createToken(
             "Bonding Token",
             "BND",
-            1_000_000_000 ether,       // tokens allocated to sale
-            1e15,              // slope a
-            1e15,              // intercept b
-            5 ether,           // targetEth
-            200,                // 2% fee
-            admin              // admin address
+            1_000_000_000 ether      // tokens allocated to sale
+            // 1e15,              // slope a
+            // 1e15,              // intercept b
+            // 5 ether,           // targetEth
+            // 200,                // 2% fee
+            // admin              // admin address
         );
 
         token = ERC20Mintable(tokenAddr);
@@ -86,37 +86,13 @@ contract BondingFactoryTest is Test {
         vm.startPrank(buyer);
         market.buy{value: 1 ether}();
         uint256 cost = 1 ether;
-        uint256 fee = (cost * market.treasuryFee()) / 10000;
+        uint256 fee = (cost * market.treasuryFeeBps()) / 10000;
         assertEq(address(market).balance, cost, "ETH stays in market");
         assertEq(fee, 0.02 ether, "2% fee calculation");
         vm.stopPrank();
     }
 
-    function testPauseBlocksBuySell() public {
-        vm.prank(admin);
-        market.setPaused(true);
-
-        vm.prank(buyer);
-        vm.expectRevert("paused");
-        market.buy{value: 1 ether}();
-
-        vm.prank(buyer);
-        vm.expectRevert("paused");
-        market.sell(1 ether);
-    }
-
-    function testBlacklistBlocksBuySell() public {
-        vm.prank(admin);
-        market.setBlacklisted(true);
-
-        vm.prank(buyer);
-        vm.expectRevert("blacklisted");
-        market.buy{value: 1 ether}();
-
-        vm.prank(buyer);
-        vm.expectRevert("blacklisted");
-        market.sell(1 ether);
-    }
+  
 
     // function testAddLiquidityAfterTargetReached() public {
     //     // Raise ETH to hit target

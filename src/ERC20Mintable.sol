@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.13;
+pragma solidity ^0.8.20;
+
 import {console} from "forge-std/console.sol";
 /*
   Minimal ERC20 with mint/burn for this example (use OZ in production)

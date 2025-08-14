@@ -1,99 +1,95 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.13;
+pragma solidity ^0.8.20;
 import {console} from "forge-std/console.sol";
 import {ERC20Mintable} from "./ERC20Mintable.sol";
 import {IUniswapV2Router02} from "./interfaces/IUniswapV2Router02.sol";
 import {IUniswapV2Factory} from "./interfaces/IUniswapV2Factory.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-/*
-  Market contract that implements bonding curve sale and pool creation
-*/
-contract Market {
-    // --- Market fields (mapped from your Solana struct)
-    address public token;            // token address (ERC20Mintable)
-    uint8 public bump;               // not used in EVM; kept for parity
-    uint256 public virtualEth;       // virtual ETH backing (scaled to wei)
-    uint256 public tokensAvailable;  // tokens allocated to sale (token units with decimals)
-    uint256 public totalSupply;      // total token supply (for bookkeeping)
-    uint256 public actualEth;        // ETH actually held from sales (wei)
-    uint256 public soldTokens;       // total tokens sold
-    uint256 public marketCap;        // stored market cap (optional)
-    uint256 public treasuryFee;      // fee in basis points (bps), e.g. 200 = 2%
-    bool public isBlacklisted;
-    bool public isPaused;
+/**
+ * @title PumpFunStyleMarket
+ * @notice Minimal, testable constant-product bonding curve with virtual reserves (no external ERC20).
+ *         All token math uses 18 decimals (token "units" == wei-like 1e-18).
+ *         Invariant: K = virtualEth * tokensAvailable (both act like virtual reserves).
+ */
+contract Market is ReentrancyGuard {
+    // --- Config ---
+    uint256 public constant SCALE = 1e18;
 
-    // bonding curve params (linear): price(s) = a * s + b
-    // 'a' and 'b' are fixed-point scaled by 1e18
-    uint256 public a; // slope (wei per token unit scaled)
-    uint256 public b; // intercept (wei per token scaled)
+    // Treasury fee in basis points (e.g., 200 = 2%)
+    uint256 public treasuryFeeBps = 100; // 1.00%
+    address public treasury ; // Treasury address to receive fees
 
-    address public admin;
-    uint256 public targetEth;        // when reached, optionally create Uniswap pool
-    uint256 public ethRaised;        // ETH raised (wei)
+    // --- Virtual reserves and bookkeeping ---
+    // Virtual reserves (think CPMM with seeded/virtual liquidity)
+    uint256 public virtualEth = 30 ether;        // acts like ETH reserve, in wei
+    uint256 public tokensAvailable =1073000191 ether;   // acts like token reserve, in 18-decimal token units
 
-    IUniswapV2Router02 public router;
-    address public weth;
-    address public uniswapFactory;
+    // Supply stats (for reference/testing)
+    uint256 public totalSupply = 1000000000 ether;       // total token supply configured
+    uint256 public soldTokens;        // cumulative tokens sold (in circulation outside the curve)
 
-    uint256 constant SCALE = 1e18;
+    // Actual ETH held from net buys minus net sells (excluding un-withdrawn treasury fees)
+    uint256 public actualEth;         // in wei
 
-    event Bought(address indexed buyer, uint256 ethSpent, uint256 tokensBought);
-    event Sold(address indexed seller, uint256 tokensBurned, uint256 ethReturned);
-    event LiquidityAdded(address indexed pair, uint256 tokenAmount, uint256 ethAmount);
+    // Treasury accounting
+    uint256 public treasuryAccrued;   // fees (wei) waiting to withdraw
+
+    // Simple internal ledger for testing (replace with ERC20 if needed)
+    mapping(address => uint256) public balanceOf;
+
+    address public token; // Token address (for reference, not used in math)
+
+  
+
+    // --- Events ---
+    event Bought(address indexed buyer, uint256 ethIn, uint256 fee, uint256 tokensOut);
+    event Sold(address indexed seller, uint256 tokensIn, uint256 fee, uint256 ethOut);
     event TreasuryWithdrawn(address indexed to, uint256 amount);
+    event ParamsUpdated(uint256 virtualEth, uint256 tokensAvailable, uint256 feeBps);
 
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "only admin");
-        _;
-    }
 
-    modifier live() {
-        require(!isPaused, "paused");
-        require(!isBlacklisted, "blacklisted");
-        _;
-    }
 
+    // /**
+    //  * @param _virtualEth       Initial virtual ETH reserve (e.g., 30 ether)
+    //  * @param _tokensAvailable  Initial virtual token reserve (e.g., ~1e9 * 1e18 if you seed most supply)
+    //  * @param _totalSupply      Total token supply (bookkeeping only in this mock)
+    //  * @param _treasury         Treasury address to receive fees
+    //  * @param _feeBps           Fee in basis points (<= 10000)
+    //  */
     constructor(
-        address _token,
-        address _router,
-        uint256 _a,
-        uint256 _b,
-        uint256 _tokensAllocated,
-        uint256 _targetEth,
-        uint256 _treasuryFeeBps,
-        address _admin
+        // uint256 _virtualEth,
+        // uint256 _tokensAvailable,
+        // uint256 _totalSupply,
+        // address _treasury,
+        // uint256 _feeBps
+        address _token
     ) {
+        treasury =msg.sender;
         token = _token;
-        router = IUniswapV2Router02(_router);
-        weth = router.WETH();
-        uniswapFactory = router.factory();
-        a = _a;
-        b = _b;
-        tokensAvailable = _tokensAllocated;
-        targetEth = _targetEth;
-        treasuryFee = _treasuryFeeBps; // e.g., 200 = 2%
-        admin = _admin;
-        totalSupply = ERC20Mintable(_token).totalSupply();
+        // require(_treasury != address(0), "treasury=0");
+        // require(_feeBps <= 10_000, "fee > 100%");
+        // virtualEth = _virtualEth;
+        // tokensAvailable = _tokensAvailable;
+        // totalSupply = _totalSupply;
+        // treasury = _treasury;
+        // treasuryFeeBps = _feeBps;
+        // emit ParamsUpdated(virtualEth, tokensAvailable, treasuryFeeBps);
     }
 
-    receive() external payable {
-        // allow direct buys
-        buy();
-    }
+    // ---------- View math (quotes) ----------
 
-    // --------- Bonding curve math ----------
-
-     /// Buy tokens with ETH (wei)
+    /// @notice Quote tokens out for a given ETH in (wei). Uses CPMM with virtual reserves.
     function calculateTokensBought(uint256 ethInWei) public view returns (uint256) {
+        if (ethInWei == 0) return 0;
         uint256 vs = virtualEth;
         uint256 vt = tokensAvailable;
-        uint256 dx = ethInWei;
 
         // K = vs * vt
         uint256 k = vs * vt;
 
         // new_vs = vs + ΔETH
-        uint256 newVs = vs + dx;
+        uint256 newVs = vs + ethInWei;
 
         // new_vt = floor(K / new_vs)
         uint256 newVt = k / newVs;
@@ -103,17 +99,17 @@ contract Market {
         return deltaTokens;
     }
 
-    /// Sell tokens for ETH (wei)
+    /// @notice Quote ETH out (wei) for a given tokens in.
     function calculateEthPayout(uint256 tokensInUnits) public view returns (uint256) {
+        if (tokensInUnits == 0) return 0;
         uint256 vs = virtualEth;
         uint256 vt = tokensAvailable;
-        uint256 dy = tokensInUnits;
 
         // K = vs * vt
         uint256 k = vs * vt;
 
         // new_vt = vt + Δtokens
-        uint256 newVt = vt + dy;
+        uint256 newVt = vt + tokensInUnits;
 
         // new_vs = floor(K / new_vt)
         uint256 newVs = k / newVt;
@@ -123,129 +119,107 @@ contract Market {
         return deltaEth;
     }
 
-    
+    // ---------- Public buy / sell ----------
 
-    // --------- Public buy / sell ----------
+    /// @notice Buy by sending ETH; tokens are credited to internal ledger for testing.
+    function buy() public payable nonReentrant returns (uint256 tokensOut) {
+        require(msg.value > 0, "zero ETH");
+        uint256 fee = (msg.value * treasuryFeeBps) / 10_000;
+        uint256 net = msg.value - fee;
 
-    // Buy tokens by sending ETH
-    function buy() public payable live returns (uint256 tokensBought) {
-        require(msg.value > 0, "send ETH");
-        uint256 ethIn = msg.value;
-        // compute tokens buyer will receive based on current soldTokens (s)
-        uint256 s = soldTokens;
-        uint256 delta = calculateTokensBought( ethIn);
-        console.log("buy: s=%s, delta=%s, ethIn=%s", s, delta, ethIn);
-        require(delta > 0, "zero tokens");
-        require(delta <= tokensAvailable, "not enough tokens left");
+        // Quote with NET ETH (fees don't move the curve)
+        uint256 tokensToMint = calculateTokensBought(net);
+        require(tokensToMint > 0, "zero tokens out");
+        require(tokensToMint <= tokensAvailable, "not enough tokens left");
 
+        // Update virtual reserves / state
 
+        virtualEth = virtualEth + net;                  // vs += net
+        tokensAvailable = tokensAvailable - tokensToMint; // vt -= Δtokens
 
-        // fee to treasury
-        uint256 fee = (ethIn * treasuryFee) / 10000;
-        uint256 net = ethIn - fee;
-
-        // update bookkeeping
-        virtualEth += net;
+        soldTokens += tokensToMint;
         actualEth += net;
-        soldTokens += delta;
-        tokensAvailable -= delta;
+        treasuryAccrued += fee;
 
-      
+        balanceOf[msg.sender] += tokensToMint;
+        ERC20Mintable(token).transfer(msg.sender, tokensToMint); 
 
-        // transfer tokens to buyer
-        require(ERC20Mintable(token).transfer(msg.sender, delta), "transfer failed");
-
-        emit Bought(msg.sender, ethIn, delta);
-
-        // if target reached, attempt to add liquidity (admin can call too)
-        if (ethRaised >= targetEth) {
-            // attempt to create pool and add liquidity (wrap in try/catch if router may revert)
-            // we don't auto-add a large amount — expose function that admin can call with params.
-        }
-
-        return delta;
+        
+        emit Bought(msg.sender, msg.value, fee, tokensToMint);
+        return tokensToMint;
     }
 
-    // Sell tokens back to the market: user must approve tokens first.
-    function sell(uint256 tokenAmount) external live returns (uint256 ethOut) {
+    /// @notice Convenience: sending ETH directly calls buy()
+    receive() external payable {
+        buy();
+    }
+
+    /// @notice Sell tokens back to curve (needs no ERC20—uses internal ledger for tests).
+    function sell(uint256 tokenAmount) external nonReentrant returns (uint256 ethOut) {
         require(tokenAmount > 0, "zero");
-        // current supply s = soldTokens (tokens in circulation from sale)
-        uint256 s = soldTokens;
-        require(tokenAmount <= s, "burn > sold");
+        require(balanceOf[msg.sender] >= tokenAmount, "insufficient balance");
+        require(tokenAmount <= soldTokens, "burn > sold");
 
-        // compute ETH returned for burning tokenAmount
-        uint256 returned = calculateEthPayout( tokenAmount);
+        // Quote ETH returned BEFORE fees
+        uint256 returned = calculateEthPayout(tokenAmount);
+        require(returned > 0, "zero ETH out");
+        require(address(this).balance >= returned, "insufficient ETH liquidity");
 
-        // collect fee
-        uint256 fee = (returned * treasuryFee) / 10000;
+        uint256 fee = (returned * treasuryFeeBps) / 10_000;
         uint256 net = returned - fee;
 
-        // update bookkeeping
-        soldTokens = s - tokenAmount;
-        actualEth -= net;
-        virtualEth -= returned; // reflect full returned amount
+       
 
-        // pull tokens and burn
-        require(ERC20Mintable(token).transferFrom(msg.sender, address(this), tokenAmount), "transferFrom");
-        // burn tokens by calling internal burn (token must allow admin burn). Simplify: token had been minted to market initially; to "burn", we'll keep tokens in market (or call token burn if implemented).
-        // For now, market keeps tokens (effectively removes from circulation)
-        // (Alternative: if token exposes burn, call it. We didn't implement burn in ERC20Mintable externally)
-        // send ETH to seller
-        (bool sOk,) = msg.sender.call{value: net}("");
-        require(sOk, "ETH send failed");
+        // Curve moves back: vt += tokens, vs -= returned (before fee)
+        virtualEth = virtualEth - returned;
+        tokensAvailable = tokensAvailable + tokenAmount;
 
-        emit Sold(msg.sender, tokenAmount, net);
+        soldTokens -= tokenAmount;
+        actualEth -= net;          // only the net leaves "actual" pool
+        treasuryAccrued += fee;
+
+        balanceOf[msg.sender] -= tokenAmount;
+        ERC20Mintable(token).transferFrom(msg.sender, address(this), tokenAmount); // Burn tokens from internal ledger
+
+        // Payout
+        (bool ok, ) = msg.sender.call{value: net}("");
+        require(ok, "ETH send failed");
+
+       
+        emit Sold(msg.sender, tokenAmount, fee, net);
         return net;
     }
 
-    // Admin can add liquidity to Uniswap V2 pair when sale target achieved.
-    // This will approve tokens from Market to router and call addLiquidityETH.
-    function addLiquidityToUniswap(uint256 tokenAmountDesired, uint256 amountTokenMin, uint256 amountETHMin, uint256 deadline) external onlyAdmin returns (address pair) {
-        require(ethRaised >= targetEth, "target not reached"); //100 80
-        uint256 ethBalance = address(this).balance;
-        require(ethBalance > 0, "no ETH");
-        require(tokenAmountDesired > 0, "no tokens requested");
+    // ---------- Admin ----------
 
-        // approve router to take tokens
-        require(ERC20Mintable(token).approve(address(router), tokenAmountDesired), "approve failed");
-
-        // add liquidity (sends ETH from this contract)
-        (uint256 amountToken, uint256 amountETH, ) = router.addLiquidityETH{value: ethBalance}(
-            token,
-            tokenAmountDesired,
-            amountTokenMin,
-            amountETHMin,
-            admin, // liquidity recipient to admin
-            deadline
-        );
-
-        // create pair address
-        address pairAddr = IUniswapV2Factory(uniswapFactory).createPair(token, weth);
-
-        emit LiquidityAdded(pairAddr, amountToken, amountETH);
-        return pairAddr;
+    function setFeeBps(uint256 newBps) external {
+        require(msg.sender == treasury, "only treasury");
+        require(newBps <= 10_000, "fee > 100%");
+        treasuryFeeBps = newBps;
+        emit ParamsUpdated(virtualEth, tokensAvailable, treasuryFeeBps);
     }
 
-    // Admin withdraw collected treasury fees (ETH)
-    function withdrawTreasury(address payable to) external onlyAdmin {
-        uint256 bal = address(this).balance;
-        require(bal > 0, "no eth");
-        (bool ok,) = to.call{value: bal}("");
+    function withdrawTreasury(address to, uint256 amount) external nonReentrant {
+        require(msg.sender == treasury, "only treasury");
+        require(to != address(0), "to=0");
+        require(amount <= treasuryAccrued, "exceeds accrued");
+
+        treasuryAccrued -= amount;
+        (bool ok, ) = to.call{value: amount}("");
         require(ok, "withdraw failed");
-        emit TreasuryWithdrawn(to, bal);
+        emit TreasuryWithdrawn(to, amount);
     }
 
-    // Admin controls
-    function setPaused(bool p) external onlyAdmin {
-        isPaused = p;
+    // --- Helpers for tests ---
+
+    /// @notice Current constant product K (for debugging).
+    function invariantK() external view returns (uint256) {
+        return virtualEth * tokensAvailable;
     }
 
-    function setBlacklisted(bool bflag) external onlyAdmin {
-        isBlacklisted = bflag;
-    }
-
-    function setTreasuryFee(uint256 bps) external onlyAdmin {
-        require(bps <= 2000, "max 20%");
-        treasuryFee = bps;
+    /// @notice Approx instantaneous price in wei per token (vs / vt).
+    function spotPrice() external view returns (uint256) {
+        if (tokensAvailable == 0) return type(uint256).max;
+        return (virtualEth * SCALE) / tokensAvailable;
     }
 }
