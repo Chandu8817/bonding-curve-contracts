@@ -8,7 +8,7 @@ export default function AppRoutes() {
     <Routes>
       <Route path="/" element={<Home />} />
       <Route path="/create" element={<CreateToken />} />
-      <Route path="/token/:address" element={<TokenDetail />} />
+      <Route path="/token/:token_address" element={<TokenDetail />} />
     </Routes>
   );
 }

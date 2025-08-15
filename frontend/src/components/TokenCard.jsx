@@ -7,6 +7,7 @@ import ProgressBar from "./ProgressBar";
 import { Link } from "react-router-dom";
 
 export default function TokenCard({ token }) {
+  debugger
   return (
     <div className="group relative overflow-hidden rounded-xl bg-white dark:bg-gray-800 p-6 shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1 border border-gray-200 dark:border-gray-700">
      

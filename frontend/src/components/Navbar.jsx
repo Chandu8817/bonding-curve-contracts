@@ -1,5 +1,8 @@
 import { useState, useEffect, use } from "react";
 import { useWallet } from "../hooks/useWallet";
+import {  useAccount } from 'wagmi'
+import { Account } from './account'
+import { WalletOptions } from './wallet-options'
 
 export default function Navbar() {
   const { connect, disconnect, account } = useWallet();
@@ -12,6 +15,12 @@ export default function Navbar() {
         
     }
   }, []);
+
+  function ConnectWallet() {
+  const { isConnected } = useAccount()
+  if (isConnected) return <Account />
+  return <WalletOptions />
+}
 
   // Auto theme based on system preference
   useEffect(() => {
@@ -91,23 +100,7 @@ export default function Navbar() {
             </a>
 
             {!account ? (
-              <button
-                onClick={connect}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-black bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-all duration-200 shadow-lg hover:shadow-primary-500/25"
-              >
-                <svg
-                  className="h-5 w-5 mr-2"
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8V7a4 4 0 00-8 0v4"></path>
-                </svg>
-                Connect Wallet
-              </button>
+             <ConnectWallet />
             ) : (
               <div className="relative group">
                 <button className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-black bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all duration-200">

@@ -16,15 +16,15 @@ export default function Home() {
     
   
 
-    async function fetchTokenData(tokenAddress) {
-      const contract = new Contract(tokenAddress, erc20ABI,provider);
-      const [name, symbol, totalSupply] = await Promise.all([
-        contract.name(),
-        contract.symbol(),
-        contract.totalSupply()
-      ]);
-      return { name, symbol, totalSupply:(ethers.formatUnits(totalSupply, 18)) };
-    }
+    // async function fetchTokenData(tokenAddress) {
+    //   const contract = new Contract(tokenAddress, erc20ABI,provider);
+    //   const [name, symbol, totalSupply] = await Promise.all([
+    //     contract.name(),
+    //     contract.symbol(),
+    //     contract.totalSupply()
+    //   ]);
+    //   return { name, symbol, totalSupply:(ethers.formatUnits(totalSupply, 18)) };
+    // }
 
      useEffect(() => {
       async function loadProvider() {
@@ -43,10 +43,10 @@ export default function Home() {
     useEffect(() => {
       async function loadTokens() {
         const { data, error } = await supabase
-          .from('tokens')
+          .from('token')
           .select('*')
           .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
-          .order('created_at', { ascending: false });
+          .order('create_time', { ascending: false });
 
         if (error) {
           console.error('Error loading tokens:', error);
@@ -57,13 +57,15 @@ export default function Home() {
         
         const tokensWithData = await Promise.all(
           data.map(async (token) => {
-            const tokenData = await fetchTokenData(token.token_address);
+            // const tokenData = await fetchTokenData(token.token_address);
             return {
               id: token.id,
-              address: token.token_address,
-              market: token.market_address,
+              address: token.token,
+              market: token.market,
               creator: token.creator,
-              ...tokenData
+              name: token.name,
+              symbol: token.symbol,
+              totalSupply: ethers.formatUnits(token.total_supply, 18),
             };
           })
         );

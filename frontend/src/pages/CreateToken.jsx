@@ -4,28 +4,18 @@ import { supabase } from "../utils/supabaseClient";
 import ABI from "../constant/BondingFactory.json";
 import { ethers } from "ethers";
 import { useContract } from "../hooks/useContract";
+import { useAccount } from "wagmi";
 
 export default function CreateToken() {
+   const { address } = useAccount()
   const [form, setForm] = useState({ name: "", symbol: "" });
-  const [account, setAccount] = useState(null);
+
+ 
   const contractService = useContract(
     "0x5cd5ee1d426aCD69e668bb563536f607aFC3cb7A",
     ABI.abi
   );
-  useEffect(() => {
-    const connectWallet = async () => {
-      if (window.ethereum) {
-        const accounts = await window.ethereum.request({
-          method: "eth_requestAccounts",
-        });
-        setAccount(accounts[0]);
-      } else {
-        alert("Please install MetaMask");
-      }
-    };
 
-    connectWallet();
-  }, []);
 
   function extractTokenAndMarket(log) {
     const token = ethers.getAddress("0x" + log.topics[1].slice(26));
@@ -66,11 +56,14 @@ console.log("Market:", market);
     console.log("Market Address:", marketAddr);
 debugger
     // 4. Store in Supabase
-    const { error } = await supabase.from("tokens").insert([
+    const { error } = await supabase.from("token").insert([
       {
-        token_address: tokenAddr,
-        market_address: marketAddr,
-        creator: account,
+        token: tokenAddr,
+        market: marketAddr,
+        creator: address,
+        name: form.name,
+        symbol: form.symbol,
+        total_supply: ethers.parseUnits("10000000000", 18).toString(),
       },
     ]);
 
@@ -86,6 +79,17 @@ debugger
     }
   }
 };
+
+
+if (!address) {
+  return (
+    <div className="p-6 max-w-md mx-auto">
+      <h1 className="text-2xl font-bold mb-4">Connect Wallet to Create Token</h1>
+      <p className="text-gray-600">Please connect your wallet to create a token.</p>
+    </div>
+  );
+}
+
 
   return (
     <div className="p-6 max-w-md mx-auto">

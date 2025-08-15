@@ -7,9 +7,12 @@ import erc20ABI from "../constant/erc20.json";
 import MarketABI from "../constant/Market.json";
 import toast from "react-hot-toast";
 import { useWallet } from "../hooks/useWallet";
+import { useAccount } from "wagmi";
 
 export default function TokenDetails() {
-  const { address } = useParams();
+  const { token_address } = useParams();
+   const { address } = useAccount()
+
   const [token, setToken] = useState(null);
   const [trades, setTrades] = useState([]);
   const [buyAmount, setBuyAmount] = useState("");
@@ -56,13 +59,13 @@ export default function TokenDetails() {
     const signer = await provider.getSigner();
     const userAddress = await signer.getAddress();
 
-    const tokenContract = new Contract(tokenData.token_address, erc20ABI, signer);
-    const marketContract = new Contract(tokenData.market_address, MarketABI.abi, signer);
+    const tokenContract = new Contract(tokenData.token, erc20ABI, signer);
+    // const marketContract = new Contract(tokenData.market, MarketABI.abi, signer);
 
     const [tokenBal, ethBal, marketBal] = await Promise.all([
       tokenContract.balanceOf(userAddress),
       provider.getBalance(userAddress),
-      provider.getBalance(tokenData.market_address),
+      provider.getBalance(tokenData.market),
     ]);
 
     setUserTokenBal(ethers.formatUnits(tokenBal, 18));
@@ -85,16 +88,16 @@ export default function TokenDetails() {
 
   // Fetch token & trades
   useEffect(() => {
-    if (!provider || !address) return;
+    if (!provider || !token_address) return;
     
     async function fetchToken() {
       try {
         setLoading(true);
 
         const { data, error } = await supabase
-          .from("tokens")
+          .from("token")
           .select("*")
-          .eq("token_address", address)
+          .eq("token", token_address)
           .single();
 
         if (error) {
@@ -102,23 +105,23 @@ export default function TokenDetails() {
           return;
         }
 
-        const tokenData = await fetchTokenData(address, provider);
-        const mergedData = { ...data, ...tokenData };
-        setToken(mergedData);
+        // const tokenData = await fetchTokenData(token_address, provider);
+        // const mergedData = { data};
+        setToken(data);
 
         const { data: tradesData, error: tradesError } = await supabase
           .from("trades")
           .select("*")
-          .eq("token_address", address)
+          .eq("token_address", token_address)
           .order("trade_time", { ascending: false })
           .limit(10);
-debugger
+
         if (!tradesError) {
           setTrades(tradesData);
-          setMarket(mergedData.market_address);
+          setMarket(data.market);
         }
 
-        await fetchBalances(mergedData);
+        await fetchBalances(data);
        
       } catch (err) {
         console.error("Error loading token:", err);
@@ -128,16 +131,41 @@ debugger
     }
 
     fetchToken();
-  }, [provider, address]);
+  }, [provider, token_address]);
 
   const handleBuy = async (e) => {
   e.preventDefault();
   const signer = await provider.getSigner();
-  const contract = new Contract(token.market_address, MarketABI.abi, signer);
+  const contract = new Contract(token.market, MarketABI.abi, signer);
+ let ethIn, fee, tokensOut;
 
   contract
     .buy({ value: ethers.parseUnits(buyAmount, 18) })
-    .then((tx) => tx.wait())
+    .then(async (tx) => { const receipt=  await tx.wait()
+debugger;
+     const boughtEventTopic = ethers.id("Bought(address,uint256,uint256,uint256)");
+   for (const log of receipt.logs) {
+  // Check if the event matches the Bought topic
+  if (log.topics[0] === boughtEventTopic) {
+    // topics[1] is indexed (msg.sender)
+    const buyerAddress = ethers.getAddress("0x" + log.topics[1].slice(26));
+
+    // Decode the data (non-indexed params: msg.value, fee, tokensToMint)
+     [ethIn, fee, tokensOut] = ethers.AbiCoder.defaultAbiCoder().decode(
+      ["uint256", "uint256", "uint256"],
+      log.data
+    );
+
+    console.log("Buyer:", buyerAddress);
+    console.log("ETH In (wei):", ethIn.toString());
+    console.log("Fee (wei):", fee.toString());
+    console.log("Tokens Out:", tokensOut.toString());
+  }
+}
+    
+
+
+    })
     .then(async () => {
       toast.success(`Bought ${buyAmount} ETH worth of ${token.symbol}`);
       fetchBalances(token);
@@ -148,8 +176,8 @@ debugger
           user_address: account,
           trade_type: "buy",
           amount_sent: buyAmount,
-          amount_received: 0, // optional
-          token_address: token.token_address,
+          amount_received: ethers.formatEther(tokensOut.toString(),18).toString(), // optional
+          token_address: token.token,
           trade_time: new Date().toISOString()
         }
       ]);
@@ -171,43 +199,68 @@ debugger
   const handleSell = async (e) => {
     e.preventDefault();
     const signer = await provider.getSigner();
-    const contract = new Contract(token.market_address, MarketABI.abi, signer);
-    const tokenContract = new Contract(token.token_address, erc20ABI, signer);
+    const contract = new Contract(token.market, MarketABI.abi, signer);
+    const tokenContract = new Contract(token.token, erc20ABI, signer);
     const userAddress = await signer.address;
 
-    const marketBal = await provider.getBalance(token.market_address);
+    const marketBal = await provider.getBalance(token.market);
     const sellValueEth = Number(ethers.parseEther(marketBal.toString()));
 
     if (sellValueEth <= 0) {
       toast.error("Market has no ETH for redemption");
       return;
     }
-debugger
+
     let sellAmt = (ethers.parseEther(sellAmount));
     // if (sellAmt > sellValueEth) {
     //   toast(`Reducing sell amount to ${sellValueEth} due to low market funds`);
     //   sellAmt = sellValueEth;
     // }
 
-    const allowance = await tokenContract.allowance(userAddress, token.market_address);
+    const allowance = await tokenContract.allowance(userAddress, token.market);
     
 
    const doSell = () => {
+   let tokensIn, fee, ethOut;
   contract
     .sell(sellAmt)
-    .then((tx) => tx.wait())
+    .then(async (tx) => { const receipt=  await tx.wait()
+
+      debugger;
+     const sellEventTopic = ethers.id("Sold(address,uint256,uint256,uint256)");
+   for (const log of receipt.logs) {
+  // Check if the event matches the Bought topic
+  if (log.topics[0] === sellEventTopic) {
+    // topics[1] is indexed (msg.sender)
+    const sellerAddress = ethers.getAddress("0x" + log.topics[1].slice(26));
+
+    // Decode the data (non-indexed params: msg.value, fee, tokensToMint)
+     [tokensIn, fee, ethOut] = ethers.AbiCoder.defaultAbiCoder().decode(
+      ["uint256", "uint256", "uint256"],
+      log.data
+    );
+
+    console.log("Seller:", sellerAddress);
+    console.log("Tokens In (wei):", tokensIn.toString());
+    console.log("Fee (wei):", fee.toString());
+    console.log("Tokens Out:", ethOut.toString());
+  }
+}
+    
+   
+    })
     .then(async () => {
       toast.success(`Sold ${sellAmount} ${token.symbol}`);
       fetchBalances(token);
-debugger
+
       // Insert trade record into Supabase
       const { error } = await supabase.from("trades").insert([
         {
           user_address: account ,
           trade_type: "sell",
           amount_sent: sellAmount,
-          amount_received: 0, // update if you know the received token amount
-          token_address: token.token_address,
+          amount_received: ethers.formatEther(ethOut.toString(), 18).toString(),// update if you know the received token amount
+          token_address: token.token,
           trade_time: new Date().toISOString()
         }
       ]);
@@ -222,7 +275,7 @@ debugger
 
     if (allowance < sellAmt) {
       tokenContract
-        .approve(token.market_address, sellAmt)
+        .approve(token.market, sellAmt)
         .then((tx) => tx.wait())
         .then(doSell)
         .catch((error) => {
@@ -245,16 +298,11 @@ debugger
 
 
 
-  if (!account) {
+if (!address) {
   return (
-    <div className="p-6 text-center">
-      <p className="mb-4">Please connect your wallet to view token details.</p>
-      <button
-        onClick={connect}
-        className="bg-blue-600 text-black px-4 py-2 rounded-lg"
-      >
-        Connect Wallet
-      </button>
+    <div className="p-6 max-w-md mx-auto">
+      <h1 className="text-2xl font-bold mb-4">Connect Wallet to Create Token</h1>
+      <p className="text-gray-600">Please connect your wallet to create a token.</p>
     </div>
   );
 }
@@ -263,12 +311,12 @@ debugger
     <div className="p-6 max-w-5xl mx-auto">
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 mb-6">
         <h1 className="text-black text-3xl font-bold">{token.name} ({token.symbol})</h1>
-        <p>Token Address: {token.token_address}</p>
-        <p>Total Supply: {token.totalSupply}</p>
+        <p>Token Address: {token.token}</p>
+        <p>Total Supply: {ethers.formatEther(token.total_supply,18)}</p>
         <p>Your Token Balance: {userTokenBal} {token.symbol}</p>
         <p>Your ETH Balance: {userEthBal} ETH</p>
         <p>Market ETH Remaining: {marketEthBal} ETH</p>
-        <ProgressBar progress={token.progress} />
+        <ProgressBar progress={token?.progress} />
       </div>
 
       <div className="grid md:grid-cols-2 gap-6 mb-6">
